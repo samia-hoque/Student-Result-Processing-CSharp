@@ -1,0 +1,337 @@
+using System.IO;
+using System.Linq;
+using System.Data.SqlClient;
+
+namespace _3rd_project_2025_sd
+{
+    class Student
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string Email { get; set; }
+    }
+
+    class Course
+    {
+        public string Id { get; set; }
+        public string Title { get; set; }
+        public int Credit { get; set; }
+    }
+
+    class ResultEntry
+    {
+        public string StudentId { get; set; }
+        public string CourseId { get; set; }
+        public int Marks { get; set; }
+    }
+
+    internal class Program
+    {
+        static string connectionString = @"Server=DESKTOP-C1VM0OR\SQLEXPRESS;Database=sdfp;Trusted_Connection=True;";
+        static string logPath = "app.log";
+
+        static void Main(string[] args)
+        {
+            try
+            {
+                Console.WriteLine("Choose action: 1 - Delete existing data, 2 - Insert new data");
+                string choice = Console.ReadLine().Trim();
+
+                if (choice == "1")
+                    DeleteAllData();
+                else if (choice == "2")
+                    InsertDataFromFiles();
+                else
+                {
+                    Console.WriteLine("Invalid choice. Exiting.");
+                    return;
+                }
+
+                Console.Write("Enter Output report CSV path: ");
+                string outputPath = Console.ReadLine().Trim();
+
+                Console.Write("Verbose logging? (y/N): ");
+                string verboseInput = Console.ReadLine().Trim().ToLower();
+                bool verbose = verboseInput == "y" || verboseInput == "yes";
+
+                var students = ReadStudentsFromDb(connectionString);
+                var courses = ReadCoursesFromDb(connectionString);
+                var results = ReadResultsFromDb(connectionString);
+
+                var joined = BuildReportRows(students, courses, results, verbose);
+                WriteOutputCsv(joined, outputPath, verbose);
+
+                Console.WriteLine("\nResult report generated successfully.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Something went wrong. Check the log file for details.");
+                File.AppendAllText(logPath, $"{DateTime.Now} - {ex}\n");
+            }
+        }
+
+        // -----------------------------
+        // Database Operations
+        // -----------------------------
+        static void DeleteAllData()
+        {
+            using (SqlConnection con = new SqlConnection(connectionString))
+            {
+                con.Open();
+                string sql = "DELETE FROM Results; DELETE FROM Students; DELETE FROM Courses;";
+                using (SqlCommand cmd = new SqlCommand(sql, con))
+                {
+                    cmd.ExecuteNonQuery();
+                    Console.WriteLine("All data deleted successfully.");
+                }
+            }
+        }
+
+        static void InsertDataFromFiles()
+        {
+            Console.Write("Enter your Students CSV path: ");
+            string studentsPath = Console.ReadLine().Trim();
+
+            Console.Write("Enter your Courses CSV path: ");
+            string coursesPath = Console.ReadLine().Trim();
+
+            Console.Write("Enter your Results CSV path: ");
+            string resultsPath = Console.ReadLine().Trim();
+
+            var students = ReadStudents(studentsPath, false);
+            var courses = ReadCourses(coursesPath, false);
+            var results = ReadResults(resultsPath, false);
+
+            using (SqlConnection con = new SqlConnection(connectionString))
+            {
+                con.Open();
+
+                foreach (var s in students.Values)
+                {
+                    string sql = "INSERT INTO Students (Id, Name, Email) VALUES (@Id, @Name, @Email)";
+                    using (SqlCommand cmd = new SqlCommand(sql, con))
+                    {
+                        cmd.Parameters.AddWithValue("@Id", s.Id);
+                        cmd.Parameters.AddWithValue("@Name", s.Name);
+                        cmd.Parameters.AddWithValue("@Email", s.Email);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+
+                foreach (var c in courses.Values)
+                {
+                    string sql = "INSERT INTO Courses (Id, Title, Credit) VALUES (@Id, @Title, @Credit)";
+                    using (SqlCommand cmd = new SqlCommand(sql, con))
+                    {
+                        cmd.Parameters.AddWithValue("@Id", c.Id);
+                        cmd.Parameters.AddWithValue("@Title", c.Title);
+                        cmd.Parameters.AddWithValue("@Credit", c.Credit);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+
+                foreach (var r in results)
+                {
+                    string sql = "INSERT INTO Results (StudentId, CourseId, Marks) VALUES (@StudentId, @CourseId, @Marks)";
+                    using (SqlCommand cmd = new SqlCommand(sql, con))
+                    {
+                        cmd.Parameters.AddWithValue("@StudentId", r.StudentId);
+                        cmd.Parameters.AddWithValue("@CourseId", r.CourseId);
+                        cmd.Parameters.AddWithValue("@Marks", r.Marks);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+            }
+
+            Console.WriteLine("Data inserted successfully.");
+        }
+
+        // -----------------------------
+        // CSV Read Methods (for insert)
+        // -----------------------------
+        static Dictionary<string, Student> ReadStudents(string path, bool verbose)
+        {
+            var dict = new Dictionary<string, Student>();
+            foreach (var line in File.ReadAllLines(path))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var parts = line.Split(',');
+                if (parts.Length < 2) continue;
+                dict[parts[0].Trim()] = new Student
+                {
+                    Id = parts[0].Trim(),
+                    Name = parts[1].Trim(),
+                    Email = parts.Length > 2 ? parts[2].Trim() : ""
+                };
+            }
+            return dict;
+        }
+
+        static Dictionary<string, Course> ReadCourses(string path, bool verbose)
+        {
+            var dict = new Dictionary<string, Course>();
+            foreach (var line in File.ReadAllLines(path))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var parts = line.Split(',');
+                if (parts.Length < 2) continue;
+                int credit = 0;
+                int.TryParse(parts.Length > 2 ? parts[2] : "0", out credit);
+                dict[parts[0].Trim()] = new Course
+                {
+                    Id = parts[0].Trim(),
+                    Title = parts[1].Trim(),
+                    Credit = credit
+                };
+            }
+            return dict;
+        }
+
+        static List<ResultEntry> ReadResults(string path, bool verbose)
+        {
+            var list = new List<ResultEntry>();
+            foreach (var line in File.ReadAllLines(path))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var parts = line.Split(',');
+                if (parts.Length < 2) continue;
+                int marks = 0;
+                int.TryParse(parts.Length > 2 ? parts[2] : "0", out marks);
+                list.Add(new ResultEntry
+                {
+                    StudentId = parts[0].Trim(),
+                    CourseId = parts[1].Trim(),
+                    Marks = marks
+                });
+            }
+            return list;
+        }
+
+        // -----------------------------
+        // Database Read Methods (for report)
+        // -----------------------------
+        static Dictionary<string, Student> ReadStudentsFromDb(string connectionString)
+        {
+            var dict = new Dictionary<string, Student>();
+            using (var conn = new SqlConnection(connectionString))
+            {
+                conn.Open();
+                string query = "SELECT Id, Name, Email FROM Students";
+                using (var cmd = new SqlCommand(query, conn))
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var student = new Student
+                        {
+                            Id = reader["Id"].ToString(),
+                            Name = reader["Name"].ToString(),
+                            Email = reader["Email"].ToString()
+                        };
+                        dict[student.Id] = student;
+                    }
+                }
+            }
+            return dict;
+        }
+
+        static Dictionary<string, Course> ReadCoursesFromDb(string connectionString)
+        {
+            var dict = new Dictionary<string, Course>();
+            using (var conn = new SqlConnection(connectionString))
+            {
+                conn.Open();
+                string query = "SELECT Id, Title, Credit FROM Courses";
+                using (var cmd = new SqlCommand(query, conn))
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var course = new Course
+                        {
+                            Id = reader["Id"].ToString(),
+                            Title = reader["Title"].ToString(),
+                            Credit = Convert.ToInt32(reader["Credit"])
+                        };
+                        dict[course.Id] = course;
+                    }
+                }
+            }
+            return dict;
+        }
+
+        static List<ResultEntry> ReadResultsFromDb(string connectionString)
+        {
+            var list = new List<ResultEntry>();
+            using (var conn = new SqlConnection(connectionString))
+            {
+                conn.Open();
+                string query = "SELECT StudentId, CourseId, Marks FROM Results";
+                using (var cmd = new SqlCommand(query, conn))
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        list.Add(new ResultEntry
+                        {
+                            StudentId = reader["StudentId"].ToString(),
+                            CourseId = reader["CourseId"].ToString(),
+                            Marks = Convert.ToInt32(reader["Marks"])
+                        });
+                    }
+                }
+            }
+            return list;
+        }
+
+        // -----------------------------
+        // Report Methods
+        // -----------------------------
+        static List<string[]> BuildReportRows(
+            Dictionary<string, Student> students,
+            Dictionary<string, Course> courses,
+            List<ResultEntry> results,
+            bool verbose)
+        {
+            var rows = new List<string[]>();
+
+            foreach (var r in results)
+            {
+                string studentName = students.ContainsKey(r.StudentId) ? students[r.StudentId].Name : "Unknown";
+                string courseName = courses.ContainsKey(r.CourseId) ? courses[r.CourseId].Title : "Unknown";
+                string grade = ComputeGrade(r.Marks);
+
+                rows.Add(new string[]
+                {
+                    r.StudentId, studentName, r.CourseId, courseName, r.Marks.ToString(), grade
+                });
+            }
+
+            return rows;
+        }
+
+        static string ComputeGrade(int marks)
+        {
+            if (marks >= 85) return "A+";
+            if (marks >= 70) return "A";
+            if (marks >= 50) return "B";
+            return "F";
+        }
+
+        static void WriteOutputCsv(List<string[]> rows, string outputPath, bool verbose)
+        {
+            using (var writer = new StreamWriter(outputPath))
+            {
+                writer.WriteLine("StudentID,StudentName,CourseId,CourseName,Marks,Grade");
+                foreach (var row in rows)
+                {
+                    writer.WriteLine(string.Join(",", row));
+                }
+            }
+
+            if (verbose)
+                Console.WriteLine($"Saved {rows.Count} rows to {outputPath}");
+        }
+    }
+}
+
